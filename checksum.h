@@ -1,16 +1,15 @@
+#pragma once
 #include <fstream>
-#include <utility>
-#include <bit>
-#include <array>
 #include <string>
-#include <cmath>
+#include <cstdint>
+#include <cstring>
+
 
 class checksum {
-    using ChksmFnPtr = uint8_t (checksum::*)(uint8_t, size_t);
+    using ChksmFnPtr = uint8_t(checksum:: *)(uint8_t, size_t);
 
     static constexpr size_t BUFFER_SIZE = 4;
     static constexpr size_t PROCESS_COUNT = 16;
-
 private:
     uint64_t _buffer[4] = {
         0x7FFFF737,
@@ -18,7 +17,6 @@ private:
         0x83DC6440,
         0xAA837F10
     };
-    char _bufferDynamic[4] = {};
 
     ChksmFnPtr _fnPtrs[BUFFER_SIZE] = {
         &checksum::_shr_xor,
@@ -27,32 +25,34 @@ private:
         &checksum::_xor_shl_and_or,
     };
 
-    const char* _fileName;
+
+    const char *_fileName;
     std::ifstream _ifs;
     size_t _sizeBytes = 0;
     size_t _sizeBytesFixed = 0;
 
-    uint8_t _shr_xor(uint8_t c, size_t offset) {
-        uint8_t s = c & 0x3F;
-        return (offset >> s) ^ c;
+
+    uint8_t _shr_xor(const uint8_t c, const uint64_t offset) {
+        const uint8_t s = c & 0x3F;
+        return offset >> s ^ c;
     }
 
-    uint8_t _xor_and(uint8_t c, size_t offset) {
+    uint8_t _xor_and(const uint8_t c, const uint64_t offset) {
         return (offset ^ c) & c;
     }
 
-    uint8_t _shl_or(uint8_t c, size_t offset) {
-        uint8_t s = c & 7;
-        return (c << s) | offset;
+    uint8_t _shl_or(const uint8_t c, const uint64_t offset) {
+        const uint8_t s = c & 7;
+        return c << s | offset;
     }
 
-    uint8_t _xor_shl_and_or(uint8_t c, size_t offset) {
-        uint8_t s = c & 0x3F;
-        return (offset << s) ^ (c & offset) | c;
+    uint8_t _xor_shl_and_or(const uint8_t c, const uint64_t offset) {
+        const uint8_t s = c & 0x3F;
+        return offset << s ^ c & offset | c;
     }
 
 public:
-    checksum(const char* fileName) : _fileName(fileName), _ifs(fileName, std::ios::binary) {
+    explicit checksum(const char *fileName) : _fileName(fileName), _ifs(fileName, std::ios::binary) {
         char c;
         while (_ifs.get(c)) {
             ++_sizeBytes;
@@ -60,6 +60,12 @@ public:
         _ifs.clear();
         _ifs.seekg(0, std::ios::beg);
         _sizeBytesFixed = (_sizeBytes + BUFFER_SIZE - 1) / BUFFER_SIZE;
+    }
+    ~checksum() {
+        memset(_buffer, 0, BUFFER_SIZE);
+        memset(_fnPtrs, 0, BUFFER_SIZE);
+        _sizeBytes = 0;
+        _sizeBytesFixed = 0;
     }
 
     size_t getSizeFixed() const {
@@ -73,41 +79,37 @@ public:
         x ^= x << 0x4;
         return x;
     }
-   
+
     std::string processBlocks() {
-        std::string res = "";
+        std::string res{};
         if (_sizeBytes < BUFFER_SIZE) return res;
-        size_t fixedSize = getSizeFixed();
-        uint64_t seed = sizeSeed();
+        const size_t fixedSize = getSizeFixed();
+        const uint64_t seed = sizeSeed();
 
         for (size_t i = 0; i < BUFFER_SIZE; ++i) {
-            size_t offset = (fixedSize / BUFFER_SIZE) * i;
+            const size_t offset = fixedSize / BUFFER_SIZE * i;
             std::string buffer = "";
-            char v = 0;
-            
+
             uint64_t localBuffers[BUFFER_SIZE];
-            for (size_t i = 0; i < BUFFER_SIZE; ++i) {
-                localBuffers[i] = _buffer[i] ^ (seed >> (i * 7));
-                localBuffers[i] += (seed << (i + 3));
+            for (auto j{ 0 }; j < BUFFER_SIZE; ++j) {
+                localBuffers[i] = _buffer[i] ^ seed >> (i * 7);
+                localBuffers[i] += seed << (i + 3);
             }
 
-            for (size_t j = 0; j < PROCESS_COUNT; ++j) {
-                uint8_t v = (this->*_fnPtrs[i])(uint8_t(j + seed), offset);
-                uint64_t mix = (v << (j + i + 1)) ^ offset >> (j % 7);
+            for (auto z{ 0 }; z < PROCESS_COUNT; ++z) {
+                const uint8_t v = (this->*_fnPtrs[i])(z + seed, offset);
+                const uint64_t mix = z + i + 1 ^ offset >> (z % 7);
 
                 uint64_t modifiedBuffer =
                     localBuffers[i] ^
-                    (localBuffers[i] >> (i + 1)) ^
-                    mix ^ (offset * offset + seed);
+                    localBuffers[i] >> (i + 1) ^
+                    mix ^ offset * offset + seed;
 
-                modifiedBuffer = (modifiedBuffer << (v & 7)) |
-                                 (modifiedBuffer >> (64 - (v & 7)));
-
+                modifiedBuffer = modifiedBuffer << (v & 7) |
+                    modifiedBuffer >> (64 - (v & 7));
                 buffer += std::to_string(modifiedBuffer);
-            } 
-            buffer.insert(0, std::to_string(
-                (seed ^ localBuffers[i]) & 0xFFFFFFFF
-            ));
+            }
+            buffer.insert(0, std::to_string((seed ^ localBuffers[i]) & 0xFFFFFFFF));
             res.append(buffer);
         }
         return res;
